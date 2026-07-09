@@ -1,0 +1,63 @@
+# 物語時鐘 · 正式構建
+# 手動觸發（workflow_dispatch），產出未簽名的發佈版 APK。
+# 簽名有意留白：由發佈者自行以 apksigner 完成。
+name: 構建發佈版 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 發佈構建（未簽名 APK）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 檢出代碼
+        uses: actions/checkout@v4
+
+      - name: 設置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 設置 Flutter（stable 最新）
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 解析依賴
+        run: flutter pub get
+
+      - name: 生成本地化
+        run: flutter gen-l10n
+
+      - name: 靜態分析
+        run: flutter analyze
+
+      - name: 單元測試
+        run: flutter test
+
+      - name: 構建發佈版 APK（未簽名）
+        run: flutter build apk --release
+
+      - name: 確認 APK 未簽名
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          if unzip -l "$APK" | grep -Eq 'META-INF/.*\.(RSA|DSA|EC)$'; then
+            echo '::error::APK 帶有簽名，與預期不符'
+            exit 1
+          fi
+          echo '未簽名確認通過'
+
+      - name: 上傳構建產物
+        uses: actions/upload-artifact@v4
+        with:
+          name: monogatari-clock-release-unsigned
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30

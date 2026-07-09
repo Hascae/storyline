@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 紙色（晝）與墨色（夜）：與應用內章節配色同源。 -->
+    <color name="paper">#F8F5EC</color>
+    <color name="sumi">#15161C</color>
+    <color name="launch_background">@color/paper</color>
+</resources>

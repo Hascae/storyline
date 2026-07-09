@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 預設（含簡體中文地區）名稱；繁體見 values-b+zh+Hant。 -->
+    <string name="app_name">物语时钟</string>
+</resources>

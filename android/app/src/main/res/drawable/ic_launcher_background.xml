@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 墨色底，一圈若有似無的細線，如硯中微光。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z"
+        android:fillColor="#15161C" />
+    <path
+        android:pathData="M14,54 A40,40 0 1,1 94,54 A40,40 0 1,1 14,54 Z"
+        android:strokeColor="#242630"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000" />
+</vector>
