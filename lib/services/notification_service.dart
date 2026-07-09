@@ -25,11 +25,17 @@ class NotificationStrings {
 }
 
 /// 鬧鐘響鈴時通知動作在後台 isolate 觸發。
-/// 「停止」由系統自動撤下通知；「稍後再響」在這裡重新排程。
+///
+/// 可靠性設計：稍後再響並不依賴這裡 —— 回響（T+間隔、T+2×間隔）
+/// 在鬧鐘排入系統的那一刻就已一併排好。此處只做收斂：
+/// 「稍後再響」把回響對齊到「現在+間隔」，「停止」撤掉剩餘回響。
+/// 即使本回調完全沒被執行，稍後再響依然到點必響。
 @pragma('vm:entry-point')
 void notificationTapBackground(NotificationResponse response) {
   if (response.actionId == NotificationService.actionSnooze) {
     NotificationService.snoozeFromPayload(response.payload);
+  } else if (response.actionId == NotificationService.actionStop) {
+    NotificationService.stopFromPayload(response.payload);
   }
 }
 
@@ -132,10 +138,22 @@ class NotificationService {
   }
 
   // ─── 鬧鐘 ───────────────────────────────────────────────
+  //
+  // 通知 id 槽位（alarmId × 10 + 槽）：
+  //   0      一次性主鈴
+  //   1..7   週期主鈴（按星期，系統級每週重複）
+  //   8      回響一：主鈴後「稍後再響間隔」分鐘
+  //   9      回響二：主鈴後兩倍間隔
+  // 回響與主鈴同時從主 isolate 排入系統 —— 稍後再響、無人理會
+  // 自動再響，皆不依賴任何後台執行。
 
-  static int _onceId(int alarmId) => alarmId * 10;
+  static const int _slotOnce = 0;
+  static const int _slotEchoA = 8;
+  static const int _slotEchoB = 9;
+  static const int _slotCount = 10;
+
+  static int _slotId(int alarmId, int slot) => alarmId * 10 + slot;
   static int _weekdayId(int alarmId, int weekday) => alarmId * 10 + weekday;
-  static int _snoozeId(int alarmId) => alarmId * 10 + 8;
 
   String _alarmPayload(Alarm alarm) => jsonEncode(<String, Object?>{
         'kind': 'alarm',
@@ -204,76 +222,102 @@ class NotificationService {
         ),
       );
 
-  /// 重排某個鬧鐘的全部觸發。
-  Future<void> scheduleAlarm(Alarm alarm, {DateTime? now}) async {
-    await cancelAlarm(alarm.id);
-    if (!alarm.enabled) return;
-
-    final DateTime base = now ?? DateTime.now();
-    final String title =
-        alarm.label.isEmpty ? strings.alarmDefaultTitle : alarm.label;
-    final String payload = _alarmPayload(alarm);
-
-    if (alarm.isOnce) {
-      await _plugin.zonedSchedule(
-        id: _onceId(alarm.id),
-        title: title,
-        body: strings.alarmBody,
-        scheduledDate: tz.TZDateTime.from(alarm.nextTrigger(base), tz.local),
-        notificationDetails: _alarmNotification(alarm),
-        androidScheduleMode: AndroidScheduleMode.alarmClock,
-        payload: payload,
-      );
-      return;
-    }
-
-    for (final int weekday in alarm.weekdays) {
-      final Alarm single = alarm.copyWith(weekdays: <int>{weekday});
-      await _plugin.zonedSchedule(
-        id: _weekdayId(alarm.id, weekday),
-        title: title,
-        body: strings.alarmBody,
-        scheduledDate: tz.TZDateTime.from(single.nextTrigger(base), tz.local),
-        notificationDetails: _alarmNotification(alarm),
-        androidScheduleMode: AndroidScheduleMode.alarmClock,
-        payload: payload,
-        matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-      );
-    }
-  }
-
-  Future<void> cancelAlarm(int alarmId) async {
-    for (int slot = 0; slot <= 8; slot++) {
-      await _plugin.cancel(id: alarmId * 10 + slot);
-    }
-  }
-
-  /// 撤下正在響的通知（響鈴頁上的「停止」）。
-  Future<void> dismissRinging(int alarmId) async {
-    for (int slot = 0; slot <= 8; slot++) {
-      await _plugin.cancel(id: alarmId * 10 + slot);
-    }
-  }
-
-  /// 從響鈴頁發起的稍後再響。
-  Future<void> snoozeAlarm(Alarm alarm) async {
-    await dismissRinging(alarm.id);
-    // 週期鬧鐘的常規排程被上面一併取消，重新掛回。
-    await scheduleAlarm(alarm);
-    final DateTime at =
-        DateTime.now().add(Duration(minutes: alarm.snoozeMinutes));
+  /// 排一發鬧鐘通知（主鈴或回響共用）。
+  Future<void> _scheduleRing({
+    required int id,
+    required Alarm alarm,
+    required DateTime at,
+    DateTimeComponents? repeat,
+  }) async {
     await _plugin.zonedSchedule(
-      id: _snoozeId(alarm.id),
+      id: id,
       title: alarm.label.isEmpty ? strings.alarmDefaultTitle : alarm.label,
       body: strings.alarmBody,
       scheduledDate: tz.TZDateTime.from(at, tz.local),
       notificationDetails: _alarmNotification(alarm),
       androidScheduleMode: AndroidScheduleMode.alarmClock,
       payload: _alarmPayload(alarm),
+      matchDateTimeComponents: repeat,
     );
   }
 
-  /// 供後台 isolate 使用：僅憑 payload 重新排一個稍後再響。
+  /// 把兩發回響對齊到某個主鈴時刻之後。
+  Future<void> _scheduleEchoes(Alarm alarm, DateTime ringAt) async {
+    final Duration gap = Duration(minutes: alarm.snoozeMinutes);
+    await _scheduleRing(
+        id: _slotId(alarm.id, _slotEchoA), alarm: alarm, at: ringAt.add(gap));
+    await _scheduleRing(
+        id: _slotId(alarm.id, _slotEchoB),
+        alarm: alarm,
+        at: ringAt.add(gap * 2));
+  }
+
+  /// 重排某個鬧鐘的全部觸發（主鈴 + 回響）。
+  Future<void> scheduleAlarm(Alarm alarm, {DateTime? now}) async {
+    await cancelAlarm(alarm.id);
+    if (!alarm.enabled) return;
+
+    final DateTime base = now ?? DateTime.now();
+
+    if (alarm.isOnce) {
+      final DateTime at = alarm.nextTrigger(base);
+      await _scheduleRing(
+          id: _slotId(alarm.id, _slotOnce), alarm: alarm, at: at);
+      await _scheduleEchoes(alarm, at);
+      return;
+    }
+
+    for (final int weekday in alarm.weekdays) {
+      final Alarm single = alarm.copyWith(weekdays: <int>{weekday});
+      await _scheduleRing(
+        id: _weekdayId(alarm.id, weekday),
+        alarm: alarm,
+        at: single.nextTrigger(base),
+        repeat: DateTimeComponents.dayOfWeekAndTime,
+      );
+    }
+    // 回響跟著最近的一次主鈴走；之後每次應用喚醒／停止／
+    // 稍後再響時都會重新對齊到新的下一響。
+    await _scheduleEchoes(alarm, alarm.nextTrigger(base));
+  }
+
+  Future<void> cancelAlarm(int alarmId) async {
+    for (int slot = 0; slot < _slotCount; slot++) {
+      await _plugin.cancel(id: _slotId(alarmId, slot));
+    }
+  }
+
+  /// 撤下正在響與待響的通知（響鈴頁上的「停止」由呼叫方接手重排）。
+  Future<void> dismissRinging(int alarmId) => cancelAlarm(alarmId);
+
+  /// 從響鈴頁發起的稍後再響：
+  /// 靜音當下，於「現在＋間隔」再響，並保留一發後備回響。
+  Future<void> snoozeAlarm(Alarm alarm) async {
+    await cancelAlarm(alarm.id);
+    final DateTime now = DateTime.now();
+    final Duration gap = Duration(minutes: alarm.snoozeMinutes);
+    if (!alarm.isOnce) {
+      // 週期主鈴照常掛回（回響將以稍後再響的時刻為準，見下）。
+      for (final int weekday in alarm.weekdays) {
+        final Alarm single = alarm.copyWith(weekdays: <int>{weekday});
+        await _scheduleRing(
+          id: _weekdayId(alarm.id, weekday),
+          alarm: alarm,
+          at: single.nextTrigger(now),
+          repeat: DateTimeComponents.dayOfWeekAndTime,
+        );
+      }
+    }
+    await _scheduleRing(
+        id: _slotId(alarm.id, _slotEchoA), alarm: alarm, at: now.add(gap));
+    await _scheduleRing(
+        id: _slotId(alarm.id, _slotEchoB),
+        alarm: alarm,
+        at: now.add(gap * 2));
+  }
+
+  /// 後台 isolate 的「稍後再響」收斂：把回響對齊到「現在＋間隔」。
+  /// 若本方法從未執行，預埋回響仍在原時刻響起。
   static Future<void> snoozeFromPayload(String? raw) async {
     final Map<String, Object?>? payload = _decodePayload(raw);
     if (payload == null || payload['kind'] != 'alarm') return;
@@ -289,25 +333,45 @@ class NotificationService {
         FlutterLocalNotificationsPlugin();
     final int alarmId = payload['id']! as int;
     final int minutes = (payload['snoozeMinutes'] as int?) ?? 10;
-    final DateTime at = DateTime.now().add(Duration(minutes: minutes));
-    await plugin.zonedSchedule(
-      id: _snoozeId(alarmId),
-      title: payload['title'] as String?,
-      body: payload['body'] as String?,
-      scheduledDate: tz.TZDateTime.from(at, tz.local),
-      notificationDetails: NotificationDetails(
-        android: _alarmDetails(
-          vibrate: (payload['vibrate'] as bool?) ?? true,
-          snoozeAction: (payload['snoozeAction'] as String?) ?? 'Snooze',
-          stopAction: (payload['stopAction'] as String?) ?? 'Stop',
-          channelName: (payload['channelName'] as String?) ?? 'Alarm',
-          channelDescription:
-              (payload['channelDescription'] as String?) ?? 'Alarm',
-        ),
+    final NotificationDetails details = NotificationDetails(
+      android: _alarmDetails(
+        vibrate: (payload['vibrate'] as bool?) ?? true,
+        snoozeAction: (payload['snoozeAction'] as String?) ?? 'Snooze',
+        stopAction: (payload['stopAction'] as String?) ?? 'Stop',
+        channelName: (payload['channelName'] as String?) ?? 'Alarm',
+        channelDescription:
+            (payload['channelDescription'] as String?) ?? 'Alarm',
       ),
-      androidScheduleMode: AndroidScheduleMode.alarmClock,
-      payload: raw,
     );
+    final DateTime now = DateTime.now();
+    for (final (int slot, int factor) in <(int, int)>[
+      (_slotEchoA, 1),
+      (_slotEchoB, 2),
+    ]) {
+      await plugin.cancel(id: alarmId * 10 + slot);
+      await plugin.zonedSchedule(
+        id: alarmId * 10 + slot,
+        title: payload['title'] as String?,
+        body: payload['body'] as String?,
+        scheduledDate: tz.TZDateTime.from(
+            now.add(Duration(minutes: minutes * factor)), tz.local),
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.alarmClock,
+        payload: raw,
+      );
+    }
+  }
+
+  /// 後台 isolate 的「停止」：撤掉剩餘回響。
+  /// 只動回響槽，不碰週期主鈴的系統級重複。
+  static Future<void> stopFromPayload(String? raw) async {
+    final Map<String, Object?>? payload = _decodePayload(raw);
+    if (payload == null || payload['kind'] != 'alarm') return;
+    final FlutterLocalNotificationsPlugin plugin =
+        FlutterLocalNotificationsPlugin();
+    final int alarmId = payload['id']! as int;
+    await plugin.cancel(id: alarmId * 10 + _slotEchoA);
+    await plugin.cancel(id: alarmId * 10 + _slotEchoB);
   }
 
   // ─── 計時器 ─────────────────────────────────────────────

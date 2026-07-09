@@ -36,8 +36,9 @@ class _StopwatchPageState extends State<StopwatchPage>
       t.start();
     } else if (!widget.store.swRunning && t.isActive) {
       t.stop();
-      if (mounted) setState(() {});
     }
+    // 任何狀態變更（含暫停時按歸零）都要立即反映在畫面上。
+    if (mounted) setState(() {});
   }
 
   @override

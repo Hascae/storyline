@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -91,6 +92,7 @@ class ClockStore extends ChangeNotifier {
 
   /// 開機後、回到前台時的對賬：
   /// 已經響過的一次性鬧鐘歸於安睡，倒數到點的計時器落定。
+  /// 寬限 90 秒，避免掐斷正在響鈴／剛按下稍後再響的那一輪。
   void _reconcile(DateTime now) {
     bool dirty = false;
     for (int i = 0; i < _alarms.length; i++) {
@@ -98,9 +100,12 @@ class ClockStore extends ChangeNotifier {
       if (!a.isOnce || !a.enabled) continue;
       final int? armed = _onceArmed['${a.id}'];
       if (armed != null &&
-          DateTime.fromMillisecondsSinceEpoch(armed).isBefore(now)) {
+          DateTime.fromMillisecondsSinceEpoch(armed)
+              .isBefore(now.subtract(const Duration(seconds: 90)))) {
         _alarms[i] = a.copyWith(enabled: false);
         _onceArmed.remove('${a.id}');
+        // 殘留的回響一併從系統撤下。
+        unawaited(_notifications.cancelAlarm(a.id));
         dirty = true;
       }
     }
@@ -153,8 +158,12 @@ class ClockStore extends ChangeNotifier {
   Future<void> _armAndPersist(Alarm alarm) async {
     await _notifications.scheduleAlarm(alarm);
     if (alarm.isOnce && alarm.enabled) {
-      _onceArmed['${alarm.id}'] =
-          alarm.nextTrigger(DateTime.now()).millisecondsSinceEpoch;
+      // 標到回響鏈的最後一發：主鈴 + 兩倍稍後再響間隔。
+      // 在此之前對賬不會把它視為已完成，自動再響因此不會被掐斷。
+      _onceArmed['${alarm.id}'] = alarm
+          .nextTrigger(DateTime.now())
+          .add(Duration(minutes: alarm.snoozeMinutes * 2))
+          .millisecondsSinceEpoch;
     } else {
       _onceArmed.remove('${alarm.id}');
     }
@@ -202,7 +211,17 @@ class ClockStore extends ChangeNotifier {
     }
   }
 
-  Future<void> snooze(Alarm alarm) => _notifications.snoozeAlarm(alarm);
+  Future<void> snooze(Alarm alarm) async {
+    await _notifications.snoozeAlarm(alarm);
+    if (alarm.isOnce) {
+      // 一次性鬧鐘的「下一響」順延到稍後再響時刻，
+      // 對賬不得在此之前把它視為已完成。
+      _onceArmed['${alarm.id}'] = DateTime.now()
+          .add(Duration(minutes: alarm.snoozeMinutes * 2))
+          .millisecondsSinceEpoch;
+      await _persistAlarms();
+    }
+  }
 
   /// 距離下一次響鈴最近的（鬧鐘, 時刻）。
   (Alarm, DateTime)? nextRing(DateTime now) {
