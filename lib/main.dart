@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app.dart';
+import 'services/alarm_ringer.dart';
 import 'services/clock_store.dart';
 import 'services/notification_service.dart';
 
@@ -12,14 +13,15 @@ Future<void> main() async {
   final NotificationService notifications = NotificationService.instance;
   await notifications.init();
 
-  final ClockStore store = ClockStore(notifications);
-  await store.load();
+  final AlarmRinger ringer = AlarmRinger(notifications.strings);
+  await ringer.init();
 
-  final int? ringAlarmId = await notifications.launchedByAlarm();
+  final ClockStore store = ClockStore(notifications, ringer);
+  await store.load();
 
   runApp(MonogatariApp(
     store: store,
     notifications: notifications,
-    initialRingAlarmId: ringAlarmId,
+    ringer: ringer,
   ));
 }

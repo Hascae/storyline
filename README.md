@@ -30,13 +30,12 @@
 
 鬧鐘應用的生命線是通知。物語時鐘在代碼層面做足：
 
-- `AlarmManager` **alarmClock 級精確排程**（`AndroidScheduleMode.alarmClock`），Doze 省電模式下依然準點
-- 聲明 `USE_EXACT_ALARM`（Android 13+ 鬧鐘應用由系統自動授予）與 `SCHEDULE_EXACT_ALARM`（Android 12/12L），不需用戶手動開關
-- `RECEIVE_BOOT_COMPLETED`：重啟、應用更新後自動把所有鬧鐘重新掛回系統
-- 通知走**鬧鐘專用音訊通道**（`AudioAttributesUsage.alarm`），媒體音量靜音也照響；鈴聲循環直至處理，8 分鐘無人理會自動靜音
+- 響鈴引擎為**原生 AlarmManager 精確喚醒 + `mediaPlayback` 前台服務直接播放音頻**（`alarm` 引擎），不經系統通知的聲音管道 —— 到點即以完整音量出聲，走系統鬧鐘音量
+- 聲明 `USE_EXACT_ALARM`（Android 13+ 鬧鐘應用由系統自動授予）與 `SCHEDULE_EXACT_ALARM`，不需用戶手動開關
+- `RECEIVE_BOOT_COMPLETED`：重啟後由原生接收器自動把未觸發排程重新掛回，無需拉起應用
 - **預埋回響**：主鈴排入系統的同時，「稍後再響間隔」與其兩倍處各預排一發回響。稍後再響到點必響、睡過頭自動再響，皆不依賴任何後台執行；按「停止」即撤
 - 全屏意圖（Full-Screen Intent）在鎖屏直接亮出響鈴頁
-- 週期鬧鐘按星期展開為系統級每週重複排程，即使應用長期不被打開也持續有效
+- 週期鬧鐘以**兩週深度**預排（本週＋下週），應用每次喚醒、每次響鈴互動都自動續期到完整深度
 - 每次啟動應用皆對排程做一次對賬重掛，防個別 ROM 清理
 
 授權皆由系統彈窗完成（Android 13+ 的通知權限等），介面內不設任何授權按鈕。
@@ -57,11 +56,12 @@
 | 框架 | Flutter（stable 最新，Dart 3.12+） |
 | 構建 | Gradle 9.4 · AGP 9.2 · Kotlin 2.3 · JDK 21 |
 | 系統支援 | Android 8.0（API 26）至 Android 17（API 37），compileSdk / targetSdk = 37 |
-| 通知 | flutter_local_notifications 22 · timezone 0.11 · flutter_timezone 5 |
+| 響鈴 | alarm 5.5（原生前台服務直接播放音頻） |
+| 通知 | flutter_local_notifications 22（計時提醒）· timezone 0.11 · flutter_timezone 5 |
 | 持久化 | SharedPreferences（Async API） |
 | 狀態 | 內建 ChangeNotifier，零重型依賴 |
 
-適配要點：Android 13+ 通知運行時權限、Android 12+ 精確鬧鐘政策、Android 14+ 全屏意圖政策、Android 15+ 強制邊到邊繪製、預測式返回手勢；**Android 17（targetSdk 37）合規** —— 後台音訊收緊下，鬧鐘以「精確鬧鐘權限 + `USAGE_ALARM` 音訊流」的平台豁免路徑出聲；大屏方向不可鎖定的新規對本應用無影響（從未鎖向，佈局自適應）。最低 Android 8.0 以自適應圖標與通知通道為基線。
+適配要點：Android 13+ 通知運行時權限、Android 12+ 精確鬧鐘政策、Android 14+ 全屏意圖政策、Android 15+ 強制邊到邊繪製、預測式返回手勢；**Android 17（targetSdk 37）合規** —— 後台音訊收緊下，響鈴以「精確鬧鐘權限 + `mediaPlayback` 前台服務」的正規路徑出聲；大屏方向不可鎖定的新規對本應用無影響（從未鎖向，佈局自適應）。最低 Android 8.0 以自適應圖標與通知通道為基線。
 
 ## 構建
 

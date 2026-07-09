@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 這些資源由 Dart 側以名稱引用，資源縮減時必須保留。 -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@raw/monogatari_bell,@raw/monogatari_chime,@drawable/ic_notification" />
+    tools:keep="@raw/monogatari_chime,@drawable/ic_notification" />

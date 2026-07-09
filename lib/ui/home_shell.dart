@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
-import '../models/alarm.dart';
 import '../services/clock_store.dart';
 import '../services/notification_service.dart';
 import '../theme/chapter.dart';
@@ -19,12 +18,10 @@ class HomeShell extends StatefulWidget {
     super.key,
     required this.store,
     required this.notifications,
-    required this.onRing,
   });
 
   final ClockStore store;
   final NotificationService notifications;
-  final void Function(Alarm alarm) onRing;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -48,11 +45,9 @@ class _HomeShellState extends State<HomeShell>
       _syncNotificationStrings(AppLocalizations.of(context)!);
       await widget.store.rearmAll();
     });
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      final DateTime now = DateTime.now();
-      final Alarm? firing = widget.store.consumeForegroundRing(now);
-      if (firing != null) widget.onRing(firing);
-      if (now.second % 20 == 0) widget.store.tick(now);
+    // 響鈴偵測交由響鈴核心的事件流；這裡只做週期對賬。
+    _ticker = Timer.periodic(const Duration(seconds: 20), (_) {
+      widget.store.tick(DateTime.now());
     });
   }
 
@@ -78,8 +73,6 @@ class _HomeShellState extends State<HomeShell>
     s.stopAction = l10n.stopAlarm;
     s.timerDoneTitle = l10n.timerDone;
     s.timerDoneBody = l10n.timerNotifBodyPlain;
-    s.alarmChannelName = l10n.tabAlarm;
-    s.alarmChannelDescription = l10n.alarmNotifBody;
     s.timerChannelName = l10n.timerTitle;
     s.timerChannelDescription = l10n.timerDone;
   }

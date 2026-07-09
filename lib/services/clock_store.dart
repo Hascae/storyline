@@ -7,14 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alarm.dart';
 import '../models/app_timer.dart';
 import '../models/world_city.dart';
+import 'alarm_ringer.dart';
 import 'notification_service.dart';
 
 /// 應用的單一事實來源：鬧鐘、世界時鐘、計時器、碼錶。
 /// 所有變更即刻持久化；running 狀態以牆鐘時間錨定，殺進程也不丟。
 class ClockStore extends ChangeNotifier {
-  ClockStore(this._notifications);
+  ClockStore(this._notifications, this._ringer);
 
   final NotificationService _notifications;
+  final AlarmRinger _ringer;
   final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
   static const String _kAlarms = 'alarms.v1';
@@ -38,7 +40,6 @@ class ClockStore extends ChangeNotifier {
   Duration swAccumulated = Duration.zero;
   List<Duration> swLaps = <Duration>[];
 
-  String? _foregroundRingKey;
   bool loaded = false;
 
   List<Alarm> get alarms => List<Alarm>.unmodifiable(_alarms);
@@ -105,7 +106,7 @@ class ClockStore extends ChangeNotifier {
         _alarms[i] = a.copyWith(enabled: false);
         _onceArmed.remove('${a.id}');
         // 殘留的回響一併從系統撤下。
-        unawaited(_notifications.cancelAlarm(a.id));
+        unawaited(_ringer.cancelAlarm(a.id));
         dirty = true;
       }
     }
@@ -156,7 +157,7 @@ class ClockStore extends ChangeNotifier {
   }
 
   Future<void> _armAndPersist(Alarm alarm) async {
-    await _notifications.scheduleAlarm(alarm);
+    await _ringer.scheduleAlarm(alarm);
     if (alarm.isOnce && alarm.enabled) {
       // 標到回響鏈的最後一發：主鈴 + 兩倍稍後再響間隔。
       // 在此之前對賬不會把它視為已完成，自動再響因此不會被掐斷。
@@ -173,7 +174,7 @@ class ClockStore extends ChangeNotifier {
   Future<void> deleteAlarm(int id) async {
     _alarms.removeWhere((Alarm a) => a.id == id);
     _onceArmed.remove('$id');
-    await _notifications.cancelAlarm(id);
+    await _ringer.cancelAlarm(id);
     await _persistAlarms();
     notifyListeners();
   }
@@ -202,17 +203,16 @@ class ClockStore extends ChangeNotifier {
 
   /// 響鈴頁按下「停止」。
   Future<void> stopRinging(Alarm alarm) async {
-    await _notifications.dismissRinging(alarm.id);
     if (alarm.isOnce) {
+      // 停用即撤下全部排程（含正在響的）。
       await toggleAlarm(alarm.id, false);
     } else {
-      // 循環排程仍在系統裡，僅撤下這一響。
-      await _notifications.scheduleAlarm(alarm);
+      await _ringer.stopRinging(alarm);
     }
   }
 
   Future<void> snooze(Alarm alarm) async {
-    await _notifications.snoozeAlarm(alarm);
+    await _ringer.snooze(alarm);
     if (alarm.isOnce) {
       // 一次性鬧鐘的「下一響」順延到稍後再響時刻，
       // 對賬不得在此之前把它視為已完成。
@@ -234,28 +234,8 @@ class ClockStore extends ChangeNotifier {
     return best;
   }
 
-  /// 前台響鈴偵測：到點的那一分鐘回傳鬧鐘（每分鐘至多一次）。
-  Alarm? consumeForegroundRing(DateTime now) {
-    final String key = '${now.day}-${now.hour}:${now.minute}';
-    if (_foregroundRingKey == key) return null;
-    for (final Alarm a in _alarms) {
-      if (!a.enabled) continue;
-      final DateTime t =
-          a.nextTrigger(now.subtract(const Duration(seconds: 10)));
-      if (t.difference(now).inSeconds.abs() <= 5) {
-        _foregroundRingKey = key;
-        return a;
-      }
-    }
-    return null;
-  }
-
-  /// 開機或更新後，把所有啟用中的鬧鐘重新掛回系統。
-  Future<void> rearmAll() async {
-    for (final Alarm a in _alarms) {
-      if (a.enabled) await _notifications.scheduleAlarm(a);
-    }
-  }
+  /// 應用喚醒後，把所有啟用中的鬧鐘續期到完整深度（兩週）。
+  Future<void> rearmAll() => _ringer.rearmAll(_alarms);
 
   void _sortAlarms() {
     _alarms.sort((Alarm a, Alarm b) {

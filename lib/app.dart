@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'l10n/app_localizations.dart';
 import 'models/alarm.dart';
+import 'services/alarm_ringer.dart';
 import 'services/clock_store.dart';
 import 'services/notification_service.dart';
 import 'theme/chapter.dart';
@@ -16,12 +17,12 @@ class MonogatariApp extends StatefulWidget {
     super.key,
     required this.store,
     required this.notifications,
-    this.initialRingAlarmId,
+    required this.ringer,
   });
 
   final ClockStore store;
   final NotificationService notifications;
-  final int? initialRingAlarmId;
+  final AlarmRinger ringer;
 
   @override
   State<MonogatariApp> createState() => _MonogatariAppState();
@@ -42,13 +43,8 @@ class _MonogatariAppState extends State<MonogatariApp> {
       final Chapter next = chapterOf(DateTime.now());
       if (next != _chapter) setState(() => _chapter = next);
     });
-    widget.notifications.onOpenRing = _openRingById;
-    final int? initial = widget.initialRingAlarmId;
-    if (initial != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _openRingById(initial);
-      });
-    }
+    // 響鈴（含全屏意圖冷啟動補發）一律導向響鈴頁。
+    widget.ringer.onRing = _openRingById;
   }
 
   @override
@@ -66,7 +62,11 @@ class _MonogatariAppState extends State<MonogatariApp> {
   void openRing(Alarm alarm) {
     if (_ringOpen) return;
     final NavigatorState? nav = _navigator.currentState;
-    if (nav == null) return;
+    if (nav == null) {
+      // 首幀尚未建立導航器時延後到下一幀。
+      WidgetsBinding.instance.addPostFrameCallback((_) => openRing(alarm));
+      return;
+    }
     _ringOpen = true;
     nav
         .push(MaterialPageRoute<void>(
@@ -119,7 +119,6 @@ class _MonogatariAppState extends State<MonogatariApp> {
       home: HomeShell(
         store: widget.store,
         notifications: widget.notifications,
-        onRing: openRing,
       ),
     );
   }
