@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.monogatari.clock"
-    compileSdk = flutter.compileSdkVersion
+    // Android 17（API 37）：編譯與行為基準皆對齊最新平台。
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -18,9 +19,13 @@ android {
 
     defaultConfig {
         applicationId = "com.monogatari.clock"
-        // 支援 Android 8.0（API 26）起；targetSdk 隨 Flutter 工具鏈走最新平台。
+        // 支援跨度：Android 8.0（API 26）至 Android 17（API 37）。
+        // targetSdk 37 的關鍵合規點（本應用已按此設計）：
+        //  · 後台音訊收緊 —— 鬧鐘持有 USE_EXACT_ALARM 且聲音走
+        //    USAGE_ALARM 音訊流，屬平台明文豁免路徑
+        //  · 大屏不可鎖定方向 —— 本應用從未鎖向，佈局自適應
         minSdk = 26
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 37
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

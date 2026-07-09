@@ -55,13 +55,13 @@
 | 項 | 選型 |
 | --- | --- |
 | 框架 | Flutter（stable 最新，Dart 3.12+） |
-| 構建 | Gradle 9.1 · AGP 9.0 · Kotlin 2.3 · JDK 21 |
-| 系統支援 | Android 8.0（API 26）至最新版本（targetSdk 隨工具鏈走最新平台） |
+| 構建 | Gradle 9.4 · AGP 9.2 · Kotlin 2.3 · JDK 21 |
+| 系統支援 | Android 8.0（API 26）至 Android 17（API 37），compileSdk / targetSdk = 37 |
 | 通知 | flutter_local_notifications 22 · timezone 0.11 · flutter_timezone 5 |
 | 持久化 | SharedPreferences（Async API） |
 | 狀態 | 內建 ChangeNotifier，零重型依賴 |
 
-適配要點：Android 13+ 通知運行時權限、Android 12+ 精確鬧鐘政策、Android 14+ 全屏意圖政策、Android 15+ 強制邊到邊繪製、預測式返回手勢；最低 Android 8.0 以自適應圖標與通知通道為基線，向上兼容至最新系統。
+適配要點：Android 13+ 通知運行時權限、Android 12+ 精確鬧鐘政策、Android 14+ 全屏意圖政策、Android 15+ 強制邊到邊繪製、預測式返回手勢；**Android 17（targetSdk 37）合規** —— 後台音訊收緊下，鬧鐘以「精確鬧鐘權限 + `USAGE_ALARM` 音訊流」的平台豁免路徑出聲；大屏方向不可鎖定的新規對本應用無影響（從未鎖向，佈局自適應）。最低 Android 8.0 以自適應圖標與通知通道為基線。
 
 ## 構建
 
