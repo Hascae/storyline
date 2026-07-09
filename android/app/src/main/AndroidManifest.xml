@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 後台常駐：請求把應用排除在電池優化之外（系統彈窗授權），
+         避免長時間閑置後行程被系統回收、鬧鐘失約。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name="${applicationName}"

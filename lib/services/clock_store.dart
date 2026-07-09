@@ -105,8 +105,9 @@ class ClockStore extends ChangeNotifier {
               .isBefore(now.subtract(const Duration(seconds: 90)))) {
         _alarms[i] = a.copyWith(enabled: false);
         _onceArmed.remove('${a.id}');
-        // 殘留的回響一併從系統撤下。
+        // 殘留的回響與控制通知一併從系統撤下。
         unawaited(_ringer.cancelAlarm(a.id));
+        unawaited(_notifications.cancelRingControls(a.id));
         dirty = true;
       }
     }
@@ -175,6 +176,7 @@ class ClockStore extends ChangeNotifier {
     _alarms.removeWhere((Alarm a) => a.id == id);
     _onceArmed.remove('$id');
     await _ringer.cancelAlarm(id);
+    await _notifications.cancelRingControls(id);
     await _persistAlarms();
     notifyListeners();
   }
@@ -185,6 +187,7 @@ class ClockStore extends ChangeNotifier {
     final Alarm updated =
         alarm.copyWith(enabled: enabled, clearSkip: !enabled);
     _alarms[_alarms.indexOf(alarm)] = updated;
+    if (!enabled) await _notifications.cancelRingControls(id);
     await _armAndPersist(updated);
     notifyListeners();
   }
@@ -203,6 +206,7 @@ class ClockStore extends ChangeNotifier {
 
   /// 響鈴頁按下「停止」。
   Future<void> stopRinging(Alarm alarm) async {
+    await _notifications.cancelRingControls(alarm.id);
     if (alarm.isOnce) {
       // 停用即撤下全部排程（含正在響的）。
       await toggleAlarm(alarm.id, false);
@@ -212,6 +216,7 @@ class ClockStore extends ChangeNotifier {
   }
 
   Future<void> snooze(Alarm alarm) async {
+    await _notifications.cancelRingControls(alarm.id);
     await _ringer.snooze(alarm);
     if (alarm.isOnce) {
       // 一次性鬧鐘的「下一響」順延到稍後再響時刻，

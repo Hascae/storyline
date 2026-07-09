@@ -3,16 +3,77 @@ import 'dart:convert';
 import 'package:alarm/alarm.dart' as ring;
 import 'package:alarm/utils/alarm_set.dart' as ring;
 import 'package:flutter/material.dart' show Color;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    show NotificationResponse;
 
 import '../models/alarm.dart';
-import 'notification_service.dart';
+import 'notification_strings.dart';
+
+/// 響鈴控制通知（桌面彈窗）動作在後台 isolate 觸發：
+/// 「停止」撤掉當下響鈴與回響；「稍後再響」把回響對齊到「現在＋間隔」。
+/// 一切所需資料都在 payload 裡，與主 isolate 無共享狀態。
+@pragma('vm:entry-point')
+Future<void> ringActionsBackground(NotificationResponse response) async {
+  final String? raw = response.payload;
+  if (raw == null || raw.isEmpty) return;
+  Map<String, Object?> data;
+  try {
+    data = (jsonDecode(raw) as Map).cast<String, Object?>();
+  } catch (_) {
+    return;
+  }
+  if (data['kind'] != 'ring') return;
+
+  try {
+    await ring.Alarm.init();
+  } catch (_) {}
+
+  final List<int> stopIds =
+      ((data['stopIds'] as List<Object?>?) ?? const <Object?>[])
+          .map((Object? e) => e! as int)
+          .toList();
+  for (final int id in stopIds) {
+    try {
+      await ring.Alarm.stop(id);
+    } catch (_) {}
+  }
+
+  if (response.actionId != AlarmRinger.actionSnooze || stopIds.length < 3) {
+    return;
+  }
+  final int minutes = (data['snoozeMinutes'] as int?) ?? 10;
+  final DateTime now = DateTime.now();
+  final String title = (data['title'] as String?) ?? '';
+  final String body = (data['body'] as String?) ?? '';
+  final String stopButton = (data['stopAction'] as String?) ?? 'Stop';
+  final bool vibrate = (data['vibrate'] as bool?) ?? true;
+  final int alarmId = (data['id'] as int?) ?? 0;
+  for (final (int slotId, int factor) in <(int, int)>[
+    (stopIds[1], 1),
+    (stopIds[2], 2),
+  ]) {
+    try {
+      await ring.Alarm.set(
+        alarmSettings: AlarmRinger.buildRingSettings(
+          id: slotId,
+          alarmId: alarmId,
+          at: now.add(Duration(minutes: minutes * factor)),
+          title: title,
+          body: body,
+          stopButton: stopButton,
+          vibrate: vibrate,
+        ),
+      );
+    } catch (_) {}
+  }
+}
 
 /// 鬧鐘響鈴核心 —— 由 `alarm` 套件驅動：
 /// 原生 AlarmManager 精確喚醒 + mediaPlayback 前台服務直接播放音頻，
-/// 不經系統通知的聲音管道，到點即以完整音量出聲（三星時鐘同路數），
-/// 亦是 Android 17 後台音訊收緊下的正規豁免路徑。
+/// 不經系統通知的聲音管道，到點即以完整音量出聲，
+/// 亦是 Android 17 後台音訊收緊下的正規路徑。
 ///
-/// 排程槽位（通知 id = alarmId × 100 + 槽）：
+/// 排程槽位（引擎鬧鐘 id = alarmId × 100 + 槽）：
 ///   0        一次性主鈴
 ///   10+w     星期 w 的本週主鈴（w = 1..7）
 ///   20+w     星期 w 的下週主鈴 —— 兩週深度，開一次應用即續滿
@@ -24,6 +85,9 @@ class AlarmRinger {
   AlarmRinger(this.strings);
 
   final NotificationStrings strings;
+
+  static const String actionSnooze = 'snooze';
+  static const String actionStop = 'stop';
 
   static const int _slotOnce = 0;
   static const int _slotWeekA = 10; // +weekday
@@ -37,19 +101,19 @@ class AlarmRinger {
   static const String _bellAsset = 'assets/sounds/monogatari_bell.wav';
   static const Color _accent = Color(0xFFD9532F);
 
-  /// 響鈴時回調（鬧鐘 id），由應用層導向響鈴頁。
+  /// 響鈴時回調：(鬧鐘 id, 需停止的引擎 id 清單)。
   /// 回調註冊前到達的響鈴（全屏意圖冷啟動）先入袋，註冊時補發。
-  set onRing(void Function(int alarmId)? callback) {
+  set onRing(void Function(int alarmId, List<int> stopIds)? callback) {
     _onRing = callback;
-    final int? pending = _pendingRing;
+    final (int, List<int>)? pending = _pendingRing;
     if (callback != null && pending != null) {
       _pendingRing = null;
-      callback(pending);
+      callback(pending.$1, pending.$2);
     }
   }
 
-  void Function(int alarmId)? _onRing;
-  int? _pendingRing;
+  void Function(int alarmId, List<int> stopIds)? _onRing;
+  (int, List<int>)? _pendingRing;
 
   final Set<int> _handledRings = <int>{};
 
@@ -61,10 +125,15 @@ class AlarmRinger {
         _handledRings.add(s.id);
         final int? alarmId = _alarmIdOf(s);
         if (alarmId == null) continue;
+        final List<int> stopIds = <int>{
+          s.id,
+          alarmId * 100 + _slotEchoA,
+          alarmId * 100 + _slotEchoB,
+        }.toList();
         if (_onRing != null) {
-          _onRing!(alarmId);
+          _onRing!(alarmId, stopIds);
         } else {
-          _pendingRing = alarmId;
+          _pendingRing = (alarmId, stopIds);
         }
       }
     });
@@ -83,13 +152,22 @@ class AlarmRinger {
     }
   }
 
-  ring.AlarmSettings _settings(Alarm alarm, int slot, DateTime at) {
+  /// 一發引擎鬧鐘的完整設定（主鈴、回響、後台稍後再響共用）。
+  static ring.AlarmSettings buildRingSettings({
+    required int id,
+    required int alarmId,
+    required DateTime at,
+    required String title,
+    required String body,
+    required String stopButton,
+    required bool vibrate,
+  }) {
     return ring.AlarmSettings(
-      id: alarm.id * 100 + slot,
+      id: id,
       dateTime: at,
       assetAudioPath: _bellAsset,
       loopAudio: true,
-      vibrate: alarm.vibrate,
+      vibrate: vibrate,
       warningNotificationOnKill: false,
       androidFullScreenIntent: true,
       allowAlarmOverlap: false,
@@ -98,13 +176,25 @@ class AlarmRinger {
       // 到點即聽得見 —— 「輕喚」由鈴聲自身的柔和音色承擔。
       volumeSettings: const ring.VolumeSettings.fixed(),
       notificationSettings: ring.NotificationSettings(
-        title: alarm.label.isEmpty ? strings.alarmDefaultTitle : alarm.label,
-        body: strings.alarmBody,
-        stopButton: strings.stopAction,
+        title: title,
+        body: body,
+        stopButton: stopButton,
         icon: 'ic_notification',
         iconColor: _accent,
       ),
-      payload: jsonEncode(<String, Object?>{'kind': 'alarm', 'id': alarm.id}),
+      payload: jsonEncode(<String, Object?>{'kind': 'alarm', 'id': alarmId}),
+    );
+  }
+
+  ring.AlarmSettings _settings(Alarm alarm, int slot, DateTime at) {
+    return buildRingSettings(
+      id: alarm.id * 100 + slot,
+      alarmId: alarm.id,
+      at: at,
+      title: alarm.label.isEmpty ? strings.alarmDefaultTitle : alarm.label,
+      body: strings.alarmBody,
+      stopButton: strings.stopAction,
+      vibrate: alarm.vibrate,
     );
   }
 

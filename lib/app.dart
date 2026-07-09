@@ -43,14 +43,30 @@ class _MonogatariAppState extends State<MonogatariApp> {
       final Chapter next = chapterOf(DateTime.now());
       if (next != _chapter) setState(() => _chapter = next);
     });
-    // 響鈴（含全屏意圖冷啟動補發）一律導向響鈴頁。
-    widget.ringer.onRing = _openRingById;
+    // 響鈴（含全屏意圖冷啟動補發）：蓋出桌面控制通知 + 導向響鈴頁。
+    widget.ringer.onRing = _onRingStarted;
+    widget.notifications.onOpenRing = _openRingById;
   }
 
   @override
   void dispose() {
     _chapterTicker?.cancel();
     super.dispose();
+  }
+
+  void _onRingStarted(int alarmId, List<int> stopIds) {
+    final Alarm? alarm = widget.store.alarmById(alarmId);
+    if (alarm == null) return;
+    widget.notifications.showRingControls(
+      alarmId: alarmId,
+      stopIds: stopIds,
+      title: alarm.label.isEmpty
+          ? widget.notifications.strings.alarmDefaultTitle
+          : alarm.label,
+      snoozeMinutes: alarm.snoozeMinutes,
+      vibrate: alarm.vibrate,
+    );
+    openRing(alarm);
   }
 
   void _openRingById(int alarmId) {
