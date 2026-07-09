@@ -47,8 +47,9 @@ class NotificationService {
   static const String actionSnooze = 'snooze';
   static const String actionStop = 'stop';
 
-  static const String _alarmChannelId = 'monogatari_alarm_v1';
-  static const String _timerChannelId = 'monogatari_timer_v1';
+  // 渠道一經創建，聲音便不可變；鈴聲改版必須連同渠道版本一起升。
+  static const String _alarmChannelId = 'monogatari_alarm_v2';
+  static const String _timerChannelId = 'monogatari_timer_v2';
   static const String _alarmSound = 'monogatari_bell';
   static const String _timerSound = 'monogatari_chime';
 
@@ -187,8 +188,10 @@ class NotificationService {
       sound: const RawResourceAndroidNotificationSound(_alarmSound),
       audioAttributesUsage: AudioAttributesUsage.alarm,
       enableVibration: vibrate,
+      // 漸進式振動：短促起步、逐步加長，與漸強鈴聲同步「輕喚」。
       vibrationPattern: vibrate
-          ? Int64List.fromList(<int>[0, 700, 500, 700, 500, 700])
+          ? Int64List.fromList(
+              <int>[0, 180, 820, 280, 720, 420, 580, 600, 400])
           : null,
       additionalFlags: Int32List.fromList(<int>[_flagInsistent]),
       ongoing: true,
@@ -390,7 +393,7 @@ class NotificationService {
           sound: const RawResourceAndroidNotificationSound(_timerSound),
           audioAttributesUsage: AudioAttributesUsage.alarm,
           enableVibration: true,
-          vibrationPattern: Int64List.fromList(<int>[0, 400, 300, 400]),
+          vibrationPattern: Int64List.fromList(<int>[0, 250, 550, 350]),
           additionalFlags: Int32List.fromList(<int>[_flagInsistent]),
           timeoutAfter: const Duration(minutes: 1).inMilliseconds,
           autoCancel: true,
