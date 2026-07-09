@@ -48,8 +48,8 @@ class NotificationService {
   static const String actionStop = 'stop';
 
   // 渠道一經創建，聲音便不可變；鈴聲改版必須連同渠道版本一起升。
-  static const String _alarmChannelId = 'monogatari_alarm_v2';
-  static const String _timerChannelId = 'monogatari_timer_v2';
+  static const String _alarmChannelId = 'monogatari_alarm_v3';
+  static const String _timerChannelId = 'monogatari_timer_v3';
   static const String _alarmSound = 'monogatari_bell';
   static const String _timerSound = 'monogatari_chime';
 
